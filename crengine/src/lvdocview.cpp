@@ -3353,7 +3353,6 @@ bool LVDocView::goLink(lString32 link, bool savePos) {
 			m_doc_props->setString(DOC_PROP_CODE_BASE, LVExtractPath(filename));
 			m_doc_props->setString(DOC_PROP_FILE_SIZE, lString32::itoa(
 					(int) stream->GetSize()));
-            m_doc_props->setHex(DOC_PROP_FILE_CRC32, stream->getcrc32());
 			// TODO: load document from stream properly
 			if (!LoadDocument(stream)) {
                 createDefaultDocument(cs32("Load error"), lString32(
@@ -4065,7 +4064,6 @@ static void FileToArcProps(CRPropRef props) {
     props->setString(DOC_PROP_FILE_NAME, lString32::empty_str);
     props->setString(DOC_PROP_FILE_PATH, lString32::empty_str);
     props->setString(DOC_PROP_FILE_SIZE, lString32::empty_str);
-	props->setHex(DOC_PROP_FILE_CRC32, 0);
 }
 
 /// load document from file
@@ -4117,7 +4115,6 @@ bool LVDocView::LoadDocument(const lChar32 * fname, bool metadataOnly) {
 		m_doc_props->setString(DOC_PROP_FILE_SIZE, lString32::itoa(
 				(int) stream->GetSize()));
 		m_doc_props->setString(DOC_PROP_FILE_NAME, arcItemPathName);
-        m_doc_props->setHex(DOC_PROP_FILE_CRC32, stream->getcrc32());
 		// loading document
 		if (LoadDocument(stream, metadataOnly)) {
 			m_filename = lString32(fname);
@@ -4163,7 +4160,6 @@ bool LVDocView::LoadDocument(const lChar32 * fname, bool metadataOnly) {
     m_doc_props->setString(DOC_PROP_FILE_NAME, fn);
 	m_doc_props->setString(DOC_PROP_FILE_SIZE, lString32::itoa(
 			(int) stream->GetSize()));
-    m_doc_props->setHex(DOC_PROP_FILE_CRC32, stream->getcrc32());
 
 	if (LoadDocument(stream, metadataOnly)) {
 		m_filename = lString32(fname);
@@ -4657,7 +4653,6 @@ bool LVDocView::LoadDocument(LVStreamRef stream, bool metadataOnly) {
 					m_doc_props->setString(DOC_PROP_FILE_NAME, fn);
 					m_doc_props->setString(DOC_PROP_CODE_BASE, LVExtractPath(fn) );
 					m_doc_props->setString(DOC_PROP_FILE_SIZE, lString32::itoa((int)m_stream->GetSize()));
-                    m_doc_props->setHex(DOC_PROP_FILE_CRC32, m_stream->getcrc32());
 					found = true;
 				}
 			}
