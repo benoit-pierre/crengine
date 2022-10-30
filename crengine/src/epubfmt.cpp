@@ -897,7 +897,186 @@ public:
     }
 };
 
-bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCallback * progressCallback, CacheLoadingCallback * formatCallback, bool metadataOnly )
+class RawTextLengthCalculator : public LVXMLParserCallback {
+    private:
+        bool     in_body = false;
+        lvsize_t text_length = 0;
+    public:
+        RawTextLengthCalculator() {}
+        ~RawTextLengthCalculator() {}
+        lUInt32 getFlags() { return TXTFLG_CASE_SENSITIVE_TAGS_ATTRS; }
+        lvsize_t getTextLength() {
+            return text_length;
+        }
+        void OnStop() {
+            in_body = false;
+        }
+        ldomNode * OnTagOpen( const lChar32 * nsname, const lChar32 * tagname ) {
+            if ( !in_body && !lStr_cmp( tagname, U"body" ) )
+                in_body = true;
+            return NULL;
+        }
+        void OnTagBody() {}
+        void OnTagClose( const lChar32 * nsname, const lChar32 * tagname, bool self_closing_tag=false ) {
+        }
+        void OnAttribute( const lChar32 * nsname, const lChar32 * attrname, const lChar32 * attrvalue ) {}
+        void OnText( const lChar32 * text, int len, lUInt32 flags ) {
+            if ( in_body )
+                text_length += len;
+        }
+        bool OnBlob( lString32 name, const lUInt8 * data, int size ) {
+            return false;
+        }
+};
+
+lvsize_t static calculate_raw_text_length(LVStreamRef stream) {
+    const int max_lookup_size = 6; /* "<!--", "-->", "<body>" or a 4 bytes
+                                      UTF-8 encoded Unicode character */
+    const int body_size = 6; /* <body> */
+    lvsize_t chunk_size = 16 * 1024;
+    lvsize_t text_length = 0;
+    lUInt8 * buffer;
+    lvsize_t size;
+    const lUInt8 * p;
+    const lUInt8 * end;
+
+    size = stream->GetSize();
+    /* chunk_size = size; */
+    if (size < chunk_size)
+        chunk_size = size;
+    buffer = new lUInt8[max_lookup_size + chunk_size];
+
+#define FILL_BUFFER() \
+    \
+    if (p >= end) { \
+        /* Yes, we might miss a couple characters if we were on */ \
+        /* the last chunk and the XML document was malformed... */ \
+        if (size < max_lookup_size) \
+            goto _end; \
+        lvsize_t skip = p - end; \
+        memcpy(buffer + skip, end, max_lookup_size - skip); \
+        if (size < chunk_size) \
+            chunk_size = size; \
+        lvsize_t nb_read = 0; \
+        if (LVERR_OK != stream->Read(buffer + max_lookup_size, chunk_size, &nb_read)) { \
+            fprintf(stderr, "read error\n"); \
+            goto _end; \
+        } \
+        if (nb_read < chunk_size) { \
+            fprintf(stderr, "short read: %u/%u\n", nb_read, chunk_size); \
+            if (chunk_size < max_lookup_size) \
+                goto _end; \
+            size = chunk_size = nb_read; \
+        } \
+        end = buffer + chunk_size; \
+        size -= chunk_size; \
+        p = buffer + skip; \
+    }
+
+    p = buffer + max_lookup_size;
+    end = buffer;
+    FILL_BUFFER();
+
+    // Check for UTF-16 BOM.
+    if ((p[0] == 0xfe && p[1] == 0xff) ||
+        (p[0] == 0xff && p[1] == 0xfe)) {
+        fprintf(stderr, "UTF-16 (%s-endian)\n", p[0] == 0xfe ? "little" : "big");
+        goto _end;
+    }
+
+    // Skip to body.
+    while (1) {
+        if (p[0] == '<' && p[1] == 'b' && p[2] == 'o' && p[3] == 'd' && p[4] == 'y' &&
+            (p[5] == '>' || p[5] == ' ' || p[5] == '\n' || p[5] == '\r' || p[5] == '\t'))
+            break;
+        ++p;
+        FILL_BUFFER();
+    }
+    if (p == end)
+        goto _end;
+    p += body_size - 1;
+    while (1) {
+        FILL_BUFFER();
+        if (*p++ == '>')
+            break;
+    }
+
+    while (1) {
+        FILL_BUFFER();
+        switch (*p) {
+        case '<':
+            // Tag or comment.
+            ++p;
+            if (p[0] == '!' && p[1] == '-' && p[2] == '-') {
+                // Comment.
+                p += 3;
+                while (1) {
+                    FILL_BUFFER();
+                    if (p[0] == '-' && p[1] == '-' && p[2] == '>')
+                        break;
+                    ++p;
+                }
+                p += 3;
+            }
+            else {
+                // Tag.
+                while (1) {
+                    FILL_BUFFER();
+                    if (*p++ == '>')
+                        break;
+                }
+            }
+            break;
+        case '&':
+            // Entity.
+            ++text_length;
+            ++p;
+            while (1) {
+                FILL_BUFFER();
+                if (*p++ == ';')
+                    break;
+            }
+            break;
+        case ' ':
+        case '\n':
+        case '\r':
+        case '\t':
+            // Whitespace.
+            ++text_length;
+            while (1) {
+                ++p;
+                FILL_BUFFER();
+                if (*p != ' '  && *p != '\n' && *p != '\r' && *p != '\t')
+                    break;
+            }
+            break;
+        default:
+            // Text.
+            ++text_length;
+            if ((*p & 0x80) == 0) {
+                p += 1;
+            } else if ((*p & 0xE0) == 0xC0) {
+                p += 2;
+            } else if ((*p & 0xF0) == 0xE0) {
+                p += 3;
+            } else if ((*p & 0xF8) == 0xF0) {
+                p += 4;
+            } else {
+                // Invalid UTF-8 sequence...
+                p += 1;
+            }
+            break;
+        }
+    }
+
+#undef FILL_BUFFER
+
+_end:
+    delete buffer;
+    return text_length;
+}
+
+bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCallback * progressCallback, CacheLoadingCallback * formatCallback, int metadataOnly )
 {
     LVContainerRef arc = LVOpenArchieve( stream );
     if ( arc.isNull() )
@@ -1195,7 +1374,7 @@ bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCall
             }
         }
 
-        if (metadataOnly && coverId.empty()) {
+        if (metadataOnly == 1 && coverId.empty()) {
             // no cover to look for, no need for more work
             delete doc;
             return true;
@@ -1227,17 +1406,12 @@ bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCall
                             m_doc_props->setString(DOC_PROP_COVER_FILE, coverFileName);
                         }
                     }
-                    if (metadataOnly) {
+                    if (metadataOnly == 1) {
                         // coverId found, no need for more work
                         delete doc;
                         return true;
                     }
                 }
-                EpubItem * epubItem = new EpubItem;
-                epubItem->href = href;
-                epubItem->id = id;
-                epubItem->mediaType = mediaType;
-                epubItems.add( epubItem );
 
                 if ( isEpub3 && navHref.empty() ) {
                     lString32 properties = item->getAttributeValue("properties");
@@ -1248,6 +1422,12 @@ bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCall
                     }
                 }
 
+                EpubItem * epubItem = new EpubItem;
+                epubItem->href = href;
+                epubItem->id = id;
+                epubItem->mediaType = mediaType;
+                epubItems.add( epubItem );
+
 //                // register embedded document fonts
 //                if (mediaType == U"application/vnd.ms-opentype"
 //                        || mediaType == U"application/x-font-otf"
@@ -1256,7 +1436,8 @@ bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCall
 //                    fontList.add(codeBase + href);
 //                }
             }
-            if (mediaType == "text/css") {
+
+            if (!metadataOnly && mediaType == "text/css") {
                 lString32 name = LVCombinePaths(codeBase, href);
                 LVStreamRef cssStream = m_arc->OpenStream(name.c_str(), LVOM_READ);
                 if (!cssStream.isNull()) {
@@ -1311,6 +1492,96 @@ bool ImportEpubDocument( LVStreamRef stream, ldomDocument * m_doc, LVDocViewCall
 
     if ( spineItems.length()==0 )
         return false;
+
+    if (metadataOnly & 2) {
+        m_doc->getProps()->setHex(DOC_PROP_FILE_CRC32, stream->getcrc32());
+    }
+
+    if (metadataOnly & 4) {
+        size_t nb_files = m_arc->GetObjectCount();
+        lvsize_t raw_text_size = 0;
+        size_t spineItemsNb = spineItems.length();
+        for ( size_t i=0; i<spineItemsNb; i++ ) {
+            if (spineItems[i]->mediaType != "application/xhtml+xml")
+                    continue;
+            lString32 name = LVCombinePaths(codeBase, spineItems[i]->href);
+            for ( size_t j=0; j<nb_files; j++ ) {
+                const LVContainerItemInfo * item = m_arc->GetObjectInfo(j);
+                /* printf("Cre: %s == %s?\n", UnicodeToUtf8(item->GetName()).c_str(), UnicodeToUtf8(name).c_str()); */
+                if ( item && item->GetName() == name ) {
+                    /* printf("Cre: %s size: %u\n", UnicodeToUtf8(name).c_str(), item->GetSize()); */
+                    raw_text_size += item->GetSize();
+                    break;
+                }
+            }
+        }
+        m_doc->getProps()->setInt(DOC_PROP_RAW_TEXT_SIZE, raw_text_size);
+        // XXX A faire également plus bas lors d'un loop existant si !metadataOnly
+    }
+
+    if (metadataOnly & 8) {
+        const size_t MAX_ANALYZED_RAW_TEXT_LENGTH = metadataOnly & 16 ? 64 * 1024 : 0;
+        RawTextLengthCalculator raw_text_length_calculator;
+        const size_t nb_files = m_arc->GetObjectCount();
+        const size_t spineItemsNb = spineItems.length();
+        lvsize_t analyzed_raw_text_length = 0;
+        lvsize_t analyzed_raw_text_size = 0;
+        lvsize_t total_raw_text_size = 0;
+        for ( size_t i = 0; i < spineItemsNb; ++i ) {
+            if (spineItems[i]->mediaType != "application/xhtml+xml")
+                    continue;
+            lString32 name = LVCombinePaths(codeBase, spineItems[i]->href);
+            lvsize_t raw_text_size = 0;
+            if (MAX_ANALYZED_RAW_TEXT_LENGTH) {
+                // Find out raw text size.
+                for ( size_t j = 0; j < nb_files; ++j ) {
+                    const LVContainerItemInfo * info = m_arc->GetObjectInfo(j);
+                    if ( info && info->GetName() == name ) {
+                        raw_text_size = info->GetSize();
+                        break;
+                    }
+                }
+                total_raw_text_size += raw_text_size;
+                /* fprintf(stderr, "CRE: text: %s [%u bytes], %s\n", LCSTR(name), raw_text_size, */
+                /*         analyzed_raw_text_size < MAX_ANALYZED_RAW_TEXT_LENGTH ? "analyze" : "skip"); */
+                if (raw_text_length_calculator.getTextLength() >= MAX_ANALYZED_RAW_TEXT_LENGTH)
+                    continue;
+                analyzed_raw_text_size += raw_text_size;
+            }
+            LVStreamRef stream = m_arc->OpenStream(name.c_str(), LVOM_READ);
+            if ( !stream.isNull() ) {
+                LVHTMLParser parser(stream, &raw_text_length_calculator);
+                if ( !parser.CheckFormat() || !parser.Parse() )
+                    CRLog::error("Document type is not XML/XHTML for fragment %s", LCSTR(name));
+            }
+        }
+        lvsize_t raw_text_length = raw_text_length_calculator.getTextLength();
+        if (MAX_ANALYZED_RAW_TEXT_LENGTH && total_raw_text_size > analyzed_raw_text_size) {
+            float ratio = (float)total_raw_text_size / (float)analyzed_raw_text_size;
+            raw_text_length = (lvsize_t)((float)raw_text_length * ratio);
+            /* fprintf(stderr, "raw text analysis: length=%u/%u, size=%u/%u\n", */
+            /*         raw_text_length_calculator.getTextLength(), raw_text_length, */
+            /*         analyzed_raw_text_size, total_raw_text_size); */
+        }
+        m_doc->getProps()->setInt(DOC_PROP_RAW_TEXT_LENGTH, raw_text_length);
+    }
+
+    if (metadataOnly & 32) {
+        lvsize_t raw_text_length = 0;
+        const size_t spineItemsNb = spineItems.length();
+        for ( size_t i = 0; i < spineItemsNb; ++i ) {
+            if (spineItems[i]->mediaType != "application/xhtml+xml")
+                continue;
+            lString32 name = LVCombinePaths(codeBase, spineItems[i]->href);
+            LVStreamRef stream = m_arc->OpenStream(name.c_str(), LVOM_READ);
+            if ( !stream ) {
+                fprintf(stderr, "OpenStream failed: %s\n", LCSTR(name));
+                continue;
+            }
+            raw_text_length += calculate_raw_text_length(stream);
+        }
+        m_doc->getProps()->setInt(DOC_PROP_RAW_TEXT_LENGTH, raw_text_length);
+    }
 
     if (metadataOnly)
         return true; // no need for more work

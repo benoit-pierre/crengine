@@ -12,7 +12,7 @@
 #define EPUB_TOC_MAX_ITER 5000
 
 bool DetectEpubFormat( LVStreamRef stream );
-bool ImportEpubDocument( LVStreamRef stream, ldomDocument * doc, LVDocViewCallback * progressCallback, CacheLoadingCallback * formatCallback, bool metadataOnly = false );
+bool ImportEpubDocument( LVStreamRef stream, ldomDocument * doc, LVDocViewCallback * progressCallback, CacheLoadingCallback * formatCallback, int metadataOnly = 0 );
 lString32 EpubGetRootFilePath( LVContainerRef m_arc );
 LVStreamRef GetEpubCoverpage(LVContainerRef arc);
 
