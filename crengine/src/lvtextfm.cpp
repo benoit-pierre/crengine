@@ -32,7 +32,14 @@
 #endif
 
 #if (USE_FRIBIDI==1)
+#if defined __has_include
+#if __has_include (<fribidi.h>)
+#include <fribidi.h>
+#endif
+#endif
+#ifndef _FRIBIDI_H
 #include <fribidi/fribidi.h>
+#endif
 #endif
 
 #define SPACE_WIDTH_SCALE_PERCENT 100
