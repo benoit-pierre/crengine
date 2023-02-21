@@ -20,15 +20,15 @@
 #endif
 #include "../include/wordfmt.h"
 
-#if (defined(_WIN32) && !defined(MINGW))
-extern "C" {
-	int strcasecmp(const char *s1, const char *s2) {
-        return _stricmp(s1,s2);
-	}
-//char	*optarg = NULL;
-//	int	optind = 0;
-}
-#endif
+/* #if (defined(_WIN32) && !defined(MINGW)) */
+/* extern "C" { */
+/* 	int strcasecmp(const char *s1, const char *s2) { */
+/*         return _stricmp(s1,s2); */
+/* 	} */
+/* //char	*optarg = NULL; */
+/* //	int	optind = 0; */
+/* } */
+/* #endif */
 
 #ifdef _DEBUG
 #define TRACE(x, ...) CRLog::trace(x)

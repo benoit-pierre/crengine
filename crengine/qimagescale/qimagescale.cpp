@@ -757,7 +757,7 @@ unsigned char* qSmoothScaleImage(const unsigned char* __restrict src, int sw, in
         return buffer;
 
     // SSE/NEON friendly alignment, just in case...
-#if defined(__ANDROID__) && __ANDROID_API__ < 17
+#if (defined(__ANDROID__) && __ANDROID_API__ < 17) || defined(_WIN32)
     buffer = (unsigned char* __restrict) malloc(dw * dh * 4);
     if (buffer == nullptr) {
         std::cerr << "qSmoothScaleImage: out of memory, returning null!" << std::endl;

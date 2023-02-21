@@ -50,6 +50,10 @@ static lChar8 empty_str_8[] = {0};
 static lstring8_chunk_t empty_chunk_8(empty_str_8);
 lstring8_chunk_t * lString8::EMPTY_STR_8 = &empty_chunk_8;
 
+static lChar16 empty_str_16[] = {0};
+static lstring16_chunk_t empty_chunk_16(empty_str_16);
+lstring16_chunk_t * lString16::EMPTY_STR_16 = &empty_chunk_16;
+
 static lChar32 empty_str_32[] = {0};
 static lstring32_chunk_t empty_chunk_32(empty_str_32);
 lstring32_chunk_t * lString32::EMPTY_STR_32 = &empty_chunk_32;
@@ -173,6 +177,12 @@ struct lstring_chunk_slice_t {
         pFree = (lstring8_chunk_t *)res->buf8;
         return res;
     }
+    inline lstring16_chunk_t * alloc_chunk16()
+    {
+        lstring16_chunk_t * res = (lstring16_chunk_t *)pFree;
+        pFree = (lstring8_chunk_t *)res->buf16;
+        return res;
+    }
     inline lstring32_chunk_t * alloc_chunk32()
     {
         lstring32_chunk_t * res = (lstring32_chunk_t *)pFree;
@@ -194,6 +204,23 @@ struct lstring_chunk_slice_t {
 */
         pChunk->buf8 = (char *)pFree;
         pFree = pChunk;
+        return true;
+    }
+    inline bool free_chunk16(lstring16_chunk_t * pChunk)
+    {
+        if ((lstring8_chunk_t *)pChunk < pChunks || (lstring8_chunk_t *)pChunk >= pEnd)
+            return false; // chunk does not belong to this slice
+/*
+#ifdef LS_DEBUG_CHECK
+        if (!pChunk->size)
+        {
+            crFatalError(); // already freed!!!
+        }
+        pChunk->size = 0;
+#endif
+*/
+        pChunk->buf16 = (lChar16 *)pFree;
+        pFree = (lstring8_chunk_t *)pChunk;
         return true;
     }
     inline bool free_chunk32(lstring32_chunk_t * pChunk)
@@ -271,6 +298,34 @@ void lstring8_chunk_t::free( lstring8_chunk_t * pChunk )
     crFatalError(); // wrong pointer!!!
 }
 
+lstring16_chunk_t * lstring16_chunk_t::alloc()
+{
+    if (!slices_initialized)
+        init_ls_storage();
+    // search for existing slice
+    for (int i=slices_count-1; i>=0; --i)
+    {
+        if (slices[i]->pFree != NULL)
+            return slices[i]->alloc_chunk16();
+    }
+    // alloc new slice
+    if (slices_count >= MAX_SLICE_COUNT)
+        crFatalError();
+    lstring_chunk_slice_t * new_slice = new lstring_chunk_slice_t( FIRST_SLICE_SIZE << (slices_count+1) );
+    slices[slices_count++] = new_slice;
+    return slices[slices_count-1]->alloc_chunk16();
+}
+
+void lstring16_chunk_t::free( lstring16_chunk_t * pChunk )
+{
+    for (int i=slices_count-1; i>=0; --i)
+    {
+        if (slices[i]->free_chunk16(pChunk))
+            return;
+    }
+    crFatalError(); // wrong pointer!!!
+}
+
 lstring32_chunk_t * lstring32_chunk_t::alloc()
 {
     if (!slices_initialized)
@@ -304,6 +359,14 @@ void lstring32_chunk_t::free( lstring32_chunk_t * pChunk )
 // Utility functions
 ////////////////////////////////////////////////////////////////////////////
 
+inline int _lStr_len(const lChar16 * str)
+{
+    int len;
+    for (len=0; *str; str++)
+        len++;
+    return len;
+}
+
 inline int _lStr_len(const lChar32 * str)
 {
     int len;
@@ -316,6 +379,14 @@ inline int _lStr_len(const lChar8 * str)
 {
     int len;
     for (len=0; *str; str++)
+        len++;
+    return len;
+}
+
+inline int _lStr_nlen(const lChar16 * str, int maxcount)
+{
+    int len;
+    for (len=0; len<maxcount && *str; str++)
         len++;
     return len;
 }
@@ -336,6 +407,14 @@ inline int _lStr_nlen(const lChar8 * str, int maxcount)
     return len;
 }
 
+inline int _lStr_cpy(lChar16 * dst, const lChar16 * src)
+{
+    int count;
+    for ( count=0; (*dst++ = *src++); count++ )
+        ;
+    return count;
+}
+
 inline int _lStr_cpy(lChar32 * dst, const lChar32 * src)
 {
     int count;
@@ -352,10 +431,26 @@ inline int _lStr_cpy(lChar8 * dst, const lChar8 * src)
     return count;
 }
 
+inline int _lStr_cpy(lChar16 * dst, const lChar8 * src)
+{
+    int count;
+    for ( count=0; (*dst++ = *src++); count++ )
+        ;
+    return count;
+}
+
 inline int _lStr_cpy(lChar32 * dst, const lChar8 * src)
 {
     int count;
     for ( count=0; (*dst++ = *src++); count++ )
+        ;
+    return count;
+}
+
+inline int _lStr_cpy(lChar8 * dst, const lChar16 * src)
+{
+    int count;
+    for ( count=0; (*dst++ = (lChar8)*src++); count++ )
         ;
     return count;
 }
@@ -379,6 +474,34 @@ inline int _lStr_ncpy(lChar32 * dst, const lChar32 * src, int maxcount)
             return count;
         }
     } while ((*dst++ = *src++));
+    return count;
+}
+
+inline int _lStr_ncpy(lChar16 * dst, const lChar16 * src, int maxcount)
+{
+    int count = 0;
+    do
+    {
+        if (++count > maxcount)
+        {
+            *dst = 0;
+            return count;
+        }
+    } while ((*dst++ = *src++));
+    return count;
+}
+
+inline int _lStr_ncpy(lChar16 * dst, const lChar8 * src, int maxcount)
+{
+    int count = 0;
+    do
+    {
+        if (++count > maxcount)
+        {
+            *dst = 0;
+            return count;
+        }
+    } while ((*dst++ = (unsigned char)*src++));
     return count;
 }
 
@@ -410,6 +533,12 @@ inline int _lStr_ncpy(lChar8 * dst, const lChar8 * src, int maxcount)
     return count;
 }
 
+inline void _lStr_memcpy(lChar16 * dst, const lChar16 * src, int count)
+{
+    while ( count-- > 0)
+        (*dst++ = *src++);
+}
+
 inline void _lStr_memcpy(lChar32 * dst, const lChar32 * src, int count)
 {
     while ( count-- > 0)
@@ -419,6 +548,12 @@ inline void _lStr_memcpy(lChar32 * dst, const lChar32 * src, int count)
 inline void _lStr_memcpy(lChar8 * dst, const lChar8 * src, int count)
 {
     memcpy(dst, (const lChar8 *) src, count);
+}
+
+inline void _lStr_memset(lChar16 * dst, lChar16 value, int count)
+{
+    while ( count-- > 0)
+        *dst++ = value;
 }
 
 inline void _lStr_memset(lChar32 * dst, lChar32 value, int count)
@@ -432,6 +567,11 @@ inline void _lStr_memset(lChar8 * dst, lChar8 value, int count)
     memset(dst, (lChar8) value, count);
 }
 
+int lStr_len(const lChar16 * str)
+{
+    return _lStr_len(str);
+}
+
 int lStr_len(const lChar32 * str)
 {
     return _lStr_len(str);
@@ -440,6 +580,11 @@ int lStr_len(const lChar32 * str)
 int lStr_len(const lChar8 * str)
 {
     return _lStr_len(str);
+}
+
+int lStr_nlen(const lChar16 * str, int maxcount)
+{
+    return _lStr_nlen(str, maxcount);
 }
 
 int lStr_nlen(const lChar32 * str, int maxcount)
@@ -452,6 +597,11 @@ int lStr_nlen(const lChar8 * str, int maxcount)
     return _lStr_nlen(str, maxcount);
 }
 
+int lStr_cpy(lChar16 * dst, const lChar16 * src)
+{
+    return _lStr_cpy(dst, src);
+}
+
 int lStr_cpy(lChar32 * dst, const lChar32 * src)
 {
     return _lStr_cpy(dst, src);
@@ -462,9 +612,19 @@ int lStr_cpy(lChar8 * dst, const lChar8 * src)
     return _lStr_cpy(dst, src);
 }
 
+int lStr_cpy(lChar16 * dst, const lChar8 * src)
+{
+    return _lStr_cpy(dst, src);
+}
+
 int lStr_cpy(lChar32 * dst, const lChar8 * src)
 {
     return _lStr_cpy(dst, src);
+}
+
+int lStr_ncpy(lChar16 * dst, const lChar16 * src, int maxcount)
+{
+    return _lStr_ncpy(dst, src, maxcount);
 }
 
 int lStr_ncpy(lChar32 * dst, const lChar32 * src, int maxcount)
@@ -477,6 +637,11 @@ int lStr_ncpy(lChar8 * dst, const lChar8 * src, int maxcount)
     return _lStr_ncpy(dst, src, maxcount);
 }
 
+void lStr_memcpy(lChar16 * dst, const lChar16 * src, int count)
+{
+    _lStr_memcpy(dst, src, count);
+}
+
 void lStr_memcpy(lChar32 * dst, const lChar32 * src, int count)
 {
     _lStr_memcpy(dst, src, count);
@@ -487,6 +652,11 @@ void lStr_memcpy(lChar8 * dst, const lChar8 * src, int count)
     _lStr_memcpy(dst, src, count);
 }
 
+void lStr_memset(lChar16 * dst, lChar16 value, int count)
+{
+    _lStr_memset(dst, value, count);
+}
+
 void lStr_memset(lChar32 * dst, lChar32 value, int count)
 {
     _lStr_memset(dst, value, count);
@@ -495,6 +665,21 @@ void lStr_memset(lChar32 * dst, lChar32 value, int count)
 void lStr_memset(lChar8 * dst, lChar8 value, int count)
 {
     _lStr_memset(dst, value, count);
+}
+
+int lStr_cmp(const lChar16 * dst, const lChar16 * src)
+{
+    while ( *dst == *src)
+    {
+        if (! *dst )
+            return 0;
+        ++dst;
+        ++src;
+    }
+    if ( *dst > *src )
+        return 1;
+    else
+        return -1;
 }
 
 int lStr_cmp(const lChar32 * dst, const lChar32 * src)
@@ -527,6 +712,21 @@ int lStr_cmp(const lChar8 * dst, const lChar8 * src)
         return -1;
 }
 
+int lStr_cmp(const lChar16 * dst, const lChar8 * src)
+{
+    while ( *dst == (lChar16)*src)
+    {
+        if (! *dst )
+            return 0;
+        ++dst;
+        ++src;
+    }
+    if ( *dst > (lChar16)*src )
+        return 1;
+    else
+        return -1;
+}
+
 int lStr_cmp(const lChar32 * dst, const lChar8 * src)
 {
     while ( *dst == (lChar32)*src)
@@ -542,7 +742,51 @@ int lStr_cmp(const lChar32 * dst, const lChar8 * src)
         return -1;
 }
 
+int lStr_cmp(const lChar8 * dst, const lChar16 * src)
+{
+    while ( (lChar16)*dst == *src)
+    {
+        if (! *dst )
+            return 0;
+        ++dst;
+        ++src;
+    }
+    if ( (lChar16)*dst > *src )
+        return 1;
+    else
+        return -1;
+}
+
 int lStr_cmp(const lChar8 * dst, const lChar32 * src)
+{
+    while ( (lChar32)*dst == *src)
+    {
+        if (! *dst )
+            return 0;
+        ++dst;
+        ++src;
+    }
+    if ( (lChar32)*dst > *src )
+        return 1;
+    else
+        return -1;
+}
+
+int lStr_cmp(const lChar32 * dst, const lChar16 * src) {
+    while ( *dst == (lChar32)*src)
+    {
+        if (! *dst )
+            return 0;
+        ++dst;
+        ++src;
+    }
+    if ( *dst > (lChar32)*src )
+        return 1;
+    else
+        return -1;
+}
+
+int lStr_cmp(const lChar16 * dst, const lChar32 * src)
 {
     while ( (lChar32)*dst == *src)
     {
@@ -1333,8 +1577,6 @@ lUInt32 lString32::getHash() const
     return res;
 }
 
-
-
 void lString32Collection::reserve(int space)
 {
     if ( count + space > size )
@@ -1728,6 +1970,683 @@ int lString32HashedCollection::add( const lChar32 * s )
 }
 
 const lString32 lString32::empty_str;
+
+////////////////////////////////////////////////////////////////////////////
+// lString16
+////////////////////////////////////////////////////////////////////////////
+
+void lString16::free()
+{
+    if ( pchunk==EMPTY_STR_16 )
+        return;
+    //assert(pchunk->buf16[pchunk->len]==0);
+    ::free(pchunk->buf16);
+#if (LDOM_USE_OWN_MEM_MAN == 1)
+    for (int i=slices_count-1; i>=0; --i)
+    {
+        if (slices[i]->free_chunk16(pchunk))
+            return;
+    }
+    crFatalError(); // wrong pointer!!!
+#else
+    ::free(pchunk);
+#endif
+}
+
+void lString16::alloc(int sz)
+{
+#if (LDOM_USE_OWN_MEM_MAN == 1)
+    pchunk = lstring_chunk_t::alloc();
+#else
+    pchunk = (lstring_chunk_t*)::malloc(sizeof(lstring_chunk_t));
+#endif
+    pchunk->buf16 = (lChar16*) ::malloc( sizeof(lChar16) * (sz+1) );
+    assert( pchunk->buf16!=NULL );
+    pchunk->size = sz;
+    pchunk->nref = 1;
+}
+
+lString16::lString16(const value_type * str)
+{
+    if (!str || !(*str))
+    {
+        pchunk = EMPTY_STR_16;
+        addref();
+        return;
+    }
+    size_type len = _lStr_len(str);
+    alloc( len );
+    pchunk->len = len;
+    _lStr_cpy( pchunk->buf16, str );
+}
+
+lString16::lString16(const lChar8 * str)
+{
+    if (!str || !(*str))
+    {
+        pchunk = EMPTY_STR_16;
+        addref();
+        return;
+    }
+    pchunk = EMPTY_STR_16;
+    addref();
+    *this = UnicodeToUtf16( Utf8ToUnicode( str ) );
+}
+
+/// constructor from utf8 character array fragment
+lString16::lString16(const lChar8 * str, size_type count)
+{
+    if (!str || !(*str))
+    {
+        pchunk = EMPTY_STR_16;
+        addref();
+        return;
+    }
+    pchunk = EMPTY_STR_16;
+    addref();
+    *this = UnicodeToUtf16( Utf8ToUnicode( str, count ) );
+}
+
+
+lString16::lString16(const value_type * str, size_type count)
+{
+    if ( !str || !(*str) || count<=0 )
+    {
+        pchunk = EMPTY_STR_16;
+        addref();
+    }
+    else
+    {
+        size_type len = _lStr_nlen(str, count);
+        alloc(len);
+        _lStr_ncpy( pchunk->buf16, str, len );
+        pchunk->len = len;
+    }
+}
+
+lString16::lString16(const lString16 & str, size_type offset, size_type count)
+{
+    if ( count > str.length() - offset )
+        count = str.length() - offset;
+    if (count<=0)
+    {
+        pchunk = EMPTY_STR_16;
+        addref();
+    }
+    else
+    {
+        alloc(count);
+        _lStr_memcpy( pchunk->buf16, str.pchunk->buf16+offset, count );
+        pchunk->buf16[count]=0;
+        pchunk->len = count;
+    }
+}
+
+lString16 & lString16::assign(const value_type * str)
+{
+    if (!str || !(*str))
+    {
+        clear();
+    }
+    else
+    {
+        size_type len = _lStr_len(str);
+        if (pchunk->nref==1)
+        {
+            if (pchunk->size<=len)
+            {
+                // resize is necessary
+                pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(len+1) );
+                pchunk->size = len+1;
+            }
+        }
+        else
+        {
+            release();
+            alloc(len);
+        }
+        _lStr_cpy( pchunk->buf16, str );
+        pchunk->len = len;
+    }
+    return *this;
+}
+
+lString16 & lString16::assign(const lChar8 * str)
+{
+    if (!str || !(*str))
+    {
+        clear();
+    }
+    else
+    {
+        size_type len = _lStr_len(str);
+        if (pchunk->nref==1)
+        {
+            if (pchunk->size<=len)
+            {
+                // resize is necessary
+                pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(len+1) );
+                pchunk->size = len+1;
+            }
+        }
+        else
+        {
+            release();
+            alloc(len);
+        }
+        _lStr_cpy( pchunk->buf16, str );
+        pchunk->len = len;
+    }
+    return *this;
+}
+
+lString16 & lString16::assign(const value_type * str, size_type count)
+{
+    if ( !str || !(*str) || count<=0 )
+    {
+        clear();
+    }
+    else
+    {
+        size_type len = _lStr_nlen(str, count);
+        if (pchunk->nref==1)
+        {
+            if (pchunk->size<=len)
+            {
+                // resize is necessary
+                pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(len+1) );
+                pchunk->size = len+1;
+            }
+        }
+        else
+        {
+            release();
+            alloc(len);
+        }
+        _lStr_ncpy( pchunk->buf16, str, count );
+        pchunk->len = len;
+    }
+    return *this;
+}
+
+lString16 & lString16::assign(const lChar8 * str, size_type count)
+{
+    if ( !str || !(*str) || count<=0 )
+    {
+        clear();
+    }
+    else
+    {
+        size_type len = _lStr_nlen(str, count);
+        if (pchunk->nref==1)
+        {
+            if (pchunk->size<=len)
+            {
+                // resize is necessary
+                pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(len+1) );
+                pchunk->size = len+1;
+            }
+        }
+        else
+        {
+            release();
+            alloc(len);
+        }
+        _lStr_ncpy( pchunk->buf16, str, count );
+        pchunk->len = len;
+    }
+    return *this;
+}
+
+lString16 & lString16::assign(const lString16 & str, size_type offset, size_type count)
+{
+    if ( count > str.length() - offset )
+        count = str.length() - offset;
+    if (count<=0)
+    {
+        clear();
+    }
+    else
+    {
+        if (pchunk==str.pchunk)
+        {
+            if (&str != this)
+            {
+                release();
+                alloc(count);
+            }
+            if (offset>0)
+            {
+                _lStr_memcpy( pchunk->buf16, str.pchunk->buf16+offset, count );
+            }
+            pchunk->buf16[count]=0;
+        }
+        else
+        {
+            if (pchunk->nref==1)
+            {
+                if (pchunk->size<=count)
+                {
+                    // resize is necessary
+                    pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(count+1) );
+                    pchunk->size = count+1;
+                }
+            }
+            else
+            {
+                release();
+                alloc(count);
+            }
+            _lStr_memcpy( pchunk->buf16, str.pchunk->buf16+offset, count );
+            pchunk->buf16[count]=0;
+        }
+        pchunk->len = count;
+    }
+    return *this;
+}
+
+lString16 & lString16::erase(size_type offset, size_type count)
+{
+    if ( count > length() - offset )
+        count = length() - offset;
+    if (count<=0)
+    {
+        clear();
+    }
+    else
+    {
+        size_type newlen = length()-count;
+        if (pchunk->nref==1)
+        {
+            _lStr_memcpy( pchunk->buf16+offset, pchunk->buf16+offset+count, newlen-offset+1 );
+        }
+        else
+        {
+            lstring_chunk_t * poldchunk = pchunk;
+            release();
+            alloc( newlen );
+            _lStr_memcpy( pchunk->buf16, poldchunk->buf16, offset );
+            _lStr_memcpy( pchunk->buf16+offset, poldchunk->buf16+offset+count, newlen-offset+1 );
+        }
+        pchunk->len = newlen;
+        pchunk->buf16[newlen]=0;
+    }
+    return *this;
+}
+
+void lString16::reserve(size_type n)
+{
+    if (pchunk->nref==1)
+    {
+        if (pchunk->size < n)
+        {
+            pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(n+1) );
+            pchunk->size = n;
+        }
+    }
+    else
+    {
+        lstring_chunk_t * poldchunk = pchunk;
+        release();
+        alloc( n );
+        _lStr_memcpy( pchunk->buf16, poldchunk->buf16, poldchunk->len+1 );
+        pchunk->len = poldchunk->len;
+    }
+}
+
+void lString16::lock( size_type newsize )
+{
+    if (pchunk->nref>1)
+    {
+        lstring_chunk_t * poldchunk = pchunk;
+        release();
+        alloc( newsize );
+        size_type len = newsize;
+        if (len>poldchunk->len)
+            len = poldchunk->len;
+        _lStr_memcpy( pchunk->buf16, poldchunk->buf16, len );
+        pchunk->buf16[len]=0;
+        pchunk->len = len;
+    }
+}
+
+// lock string, allocate buffer and reset length to 0
+void lString16::reset( size_type size )
+{
+    if (pchunk->nref>1 || pchunk->size<size)
+    {
+        release();
+        alloc( size );
+    }
+    pchunk->buf16[0] = 0;
+    pchunk->len = 0;
+}
+
+void lString16::resize(size_type n, value_type e)
+{
+    lock( n );
+    if (n>=pchunk->size)
+    {
+        pchunk->buf16 = (lChar16*) ::realloc( pchunk->buf16, sizeof(lChar16)*(n+1) );
+        pchunk->size = n;
+    }
+    // fill with data if expanded
+    for (size_type i=pchunk->len; i<n; i++)
+        pchunk->buf16[i] = e;
+    pchunk->buf16[pchunk->len] = 0;
+}
+
+lString16 & lString16::append(const value_type * str)
+{
+    size_type len = _lStr_len(str);
+    reserve( pchunk->len+len );
+    _lStr_memcpy(pchunk->buf16 + pchunk->len, str, len+1);
+    pchunk->len += len;
+    return *this;
+}
+
+lString16 & lString16::append(const value_type * str, size_type count)
+{
+    reserve(pchunk->len + count);
+    _lStr_ncpy(pchunk->buf16 + pchunk->len, str, count);
+    pchunk->len += count;
+    return *this;
+}
+
+lString16 & lString16::append(const lChar8 * str)
+{
+    size_type len = _lStr_len(str);
+    reserve( pchunk->len+len );
+    _lStr_ncpy(pchunk->buf16 + pchunk->len, str, len + 1);
+    pchunk->len += len;
+    return *this;
+}
+
+lString16 & lString16::append(const lChar8 * str, size_type count)
+{
+    reserve(pchunk->len + count);
+    _lStr_ncpy(pchunk->buf16 + pchunk->len, str, count);
+    pchunk->len += count;
+    return *this;
+}
+
+lString16 & lString16::append(const lString16 & str)
+{
+    size_type len2 = pchunk->len + str.pchunk->len;
+    reserve( len2 );
+    _lStr_memcpy( pchunk->buf16+pchunk->len, str.pchunk->buf16, str.pchunk->len+1 );
+    pchunk->len = len2;
+    return *this;
+}
+
+lString16 & lString16::append(const lString16 & str, size_type offset, size_type count)
+{
+    if ( str.pchunk->len>offset )
+    {
+        if ( offset + count > str.pchunk->len )
+            count = str.pchunk->len - offset;
+        reserve( pchunk->len+count );
+        _lStr_ncpy(pchunk->buf16 + pchunk->len, str.pchunk->buf16 + offset, count);
+        pchunk->len += count;
+        pchunk->buf16[pchunk->len] = 0;
+    }
+    return *this;
+}
+
+lString16 & lString16::append(size_type count, value_type ch)
+{
+    reserve( pchunk->len+count );
+    _lStr_memset(pchunk->buf16+pchunk->len, ch, count);
+    pchunk->len += count;
+    pchunk->buf16[pchunk->len] = 0;
+    return *this;
+}
+
+lString16 & lString16::insert(size_type p0, const value_type * str)
+{
+    if (p0>pchunk->len)
+        p0 = pchunk->len;
+    int count = lStr_len(str);
+    reserve( pchunk->len+count );
+    for (size_type i=pchunk->len+count; i>p0; i--)
+        pchunk->buf16[i] = pchunk->buf16[i-1];
+    _lStr_memcpy(pchunk->buf16 + p0, str, count);
+    pchunk->len += count;
+    pchunk->buf16[pchunk->len] = 0;
+    return *this;
+}
+
+lString16 & lString16::insert(size_type p0, const value_type * str, size_type count)
+{
+    if (p0>pchunk->len)
+        p0 = pchunk->len;
+    reserve( pchunk->len+count );
+    for (size_type i=pchunk->len+count; i>p0; i--)
+        pchunk->buf16[i] = pchunk->buf16[i-1];
+    _lStr_memcpy(pchunk->buf16 + p0, str, count);
+    pchunk->len += count;
+    pchunk->buf16[pchunk->len] = 0;
+    return *this;
+}
+
+lString16 & lString16::insert(size_type p0, size_type count, value_type ch)
+{
+    if (p0>pchunk->len)
+        p0 = pchunk->len;
+    reserve( pchunk->len+count );
+    for (size_type i=pchunk->len+count; i>p0; i--)
+        pchunk->buf16[i] = pchunk->buf16[i-1];
+    _lStr_memset(pchunk->buf16+p0, ch, count);
+    pchunk->len += count;
+    pchunk->buf16[pchunk->len] = 0;
+    return *this;
+}
+
+lString16 & lString16::insert(size_type p0, const lString16 & str)
+{
+    if (p0>pchunk->len)
+        p0 = pchunk->len;
+    int count = str.length();
+    reserve( pchunk->len+count );
+    for (size_type i=pchunk->len+count; i>p0; i--)
+        pchunk->buf16[i] = pchunk->buf16[i-1];
+    _lStr_memcpy(pchunk->buf16 + p0, str.c_str(), count);
+    pchunk->len += count;
+    pchunk->buf16[pchunk->len] = 0;
+    return *this;
+}
+
+lString16 lString16::substr(size_type pos, size_type n) const
+{
+    if (pos>=length())
+        return lString16::empty_str;
+    if (pos+n>length())
+        n = length() - pos;
+    return lString16( pchunk->buf16 + pos, n );
+}
+
+lString16 & lString16::pack()
+{
+    if (pchunk->len + 4 < pchunk->size )
+    {
+        if (pchunk->nref>1)
+        {
+            lock(pchunk->len);
+        }
+        else
+        {
+            pchunk->buf16 = cr_realloc( pchunk->buf16, pchunk->len + 1 );
+            pchunk->size = pchunk->len;
+        }
+    }
+    return *this;
+}
+
+/// trims non alpha at beginning and end of string
+lString16 & lString16::trimNonAlpha()
+{
+    int firstns;
+    for (firstns = 0; firstns<pchunk->len &&
+        !isAlNum(pchunk->buf16[firstns]); ++firstns)
+        ;
+    if (firstns >= pchunk->len)
+    {
+        clear();
+        return *this;
+    }
+    int lastns;
+    for (lastns = pchunk->len-1; lastns>0 &&
+        !isAlNum(pchunk->buf16[lastns]); --lastns)
+        ;
+    int newlen = lastns-firstns+1;
+    if (newlen == pchunk->len)
+        return *this;
+    if (pchunk->nref==1)
+    {
+        if (firstns>0)
+            lStr_memcpy( pchunk->buf16, pchunk->buf16 + firstns, newlen );
+        pchunk->buf16[newlen] = 0;
+        pchunk->len = newlen;
+    }
+    else
+    {
+        lstring_chunk_t * poldchunk = pchunk;
+        release();
+        alloc( newlen );
+        _lStr_memcpy( pchunk->buf16, poldchunk->buf16+firstns, newlen );
+        pchunk->buf16[newlen] = 0;
+        pchunk->len = newlen;
+    }
+    return *this;
+}
+
+lString16 & lString16::trim()
+{
+    //
+    int firstns;
+    for (firstns = 0; firstns<pchunk->len &&
+        (pchunk->buf16[firstns]==' ' || pchunk->buf16[firstns]=='\t'); ++firstns)
+        ;
+    if (firstns >= pchunk->len)
+    {
+        clear();
+        return *this;
+    }
+    int lastns;
+    for (lastns = pchunk->len-1; lastns>0 &&
+        (pchunk->buf16[lastns]==' ' || pchunk->buf16[lastns]=='\t'); --lastns)
+        ;
+    int newlen = lastns-firstns+1;
+    if (newlen == pchunk->len)
+        return *this;
+    if (pchunk->nref==1)
+    {
+        if (firstns>0)
+            lStr_memcpy( pchunk->buf16, pchunk->buf16+firstns, newlen );
+        pchunk->buf16[newlen] = 0;
+        pchunk->len = newlen;
+    }
+    else
+    {
+        lstring_chunk_t * poldchunk = pchunk;
+        release();
+        alloc( newlen );
+        _lStr_memcpy( pchunk->buf16, poldchunk->buf16+firstns, newlen );
+        pchunk->buf16[newlen] = 0;
+        pchunk->len = newlen;
+    }
+    return *this;
+}
+
+int lString16::atoi() const
+{
+    int n = 0;
+    atoi(n);
+    return n;
+}
+
+bool lString16::atoi( int &n ) const
+{
+    n = 0;
+    int sgn = 1;
+    const lChar16 * s = c_str();
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if ( s[0]=='0' && s[1]=='x') {
+        s+=2;
+        for (;*s;) {
+            int d = hexDigit(*s++);
+            if ( d>=0 )
+                n = (n<<4) | d;
+        }
+        return true;
+    }
+    if (*s == '-')
+    {
+        sgn = -1;
+        s++;
+    }
+    else if (*s == '+')
+    {
+        s++;
+    }
+    if ( !(*s>='0' && *s<='9') )
+        return false;
+    while (*s>='0' && *s<='9')
+    {
+        n = n * 10 + ( (*s++)-'0' );
+    }
+    if ( sgn<0 )
+        n = -n;
+    return *s=='\0' || *s==' ' || *s=='\t';
+}
+
+bool lString16::atoi( lInt64 &n ) const
+{
+    int sgn = 1;
+    const lChar16 * s = c_str();
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (*s == '-')
+    {
+        sgn = -1;
+        s++;
+    }
+    else if (*s == '+')
+    {
+        s++;
+    }
+    if ( !(*s>='0' && *s<='9') )
+        return false;
+    while (*s>='0' && *s<='9')
+    {
+        n = n * 10 + ( (*s++)-'0' );
+    }
+    if ( sgn<0 )
+        n = -n;
+    return *s=='\0' || *s==' ' || *s=='\t';
+}
+
+lUInt32 lString16::getHash() const
+{
+    lUInt32 res = 0;
+    for (lInt32 i=0; i<pchunk->len; i++)
+        res = res * STRING_HASH_MULT + pchunk->buf16[i];
+    return res;
+}
+
+lUInt32 calcStringHash( const lChar16 * s )
+{
+    lUInt32 a = 2166136261u;
+    while (*s)
+    {
+        a = a * 16777619 ^ (*s++);
+    }
+    return a;
+}
+
+
+const lString16 lString16::empty_str;
 
 
 ////////////////////////////////////////////////////////////////////////////
@@ -3066,7 +3985,130 @@ int Utf8CharCount( const lChar8 * str, int len )
     return count;
 }
 
-inline int charUtf8ByteCount(int ch) {
+int Utf16CharCount( const lChar16 * str )
+{
+    int count = 0;
+    lUInt16 ch;
+    while ( (ch=*str++) ) {
+        if ( (ch >=0 && ch <= 0xD7FF) || (ch >= 0xE000 && ch <= 0xFFFF) ) {
+        } else if ( ch >= 0xD800 && ch <= 0xDBFF ) {
+            if ( !(*str++) )
+                break;
+        } else {
+            // In Unicode standard maximum length of UTF-16 sequence is 2 word!
+            // invalid first word in UTF-16 sequence, just leave as is
+            ;
+        }
+        count++;
+    }
+    return count;
+}
+
+int Utf16CharCount( const lChar16 * str, int len )
+{
+    if (len == 0)
+        return 0;
+    int count = 0;
+    lUInt16 ch;
+    const lChar16 * endp = str + len;
+    while ( (ch=*str++) ) {
+        if ( (ch >=0 && ch <= 0xD7FF) || (ch >= 0xE000 && ch <= 0xFFFF) ) {
+        } else if ( ch >= 0xD800 && ch <= 0xDBFF ) {
+            str++;
+        } else {
+            // invalid first word of UTF-16 sequence, just leave as is
+            ;
+        }
+        if (str > endp)
+            break;
+        count++;
+    }
+    return count;
+}
+
+int Wtf8CharCount( const lChar8 * str )
+{
+    int count = 0;
+    lUInt8 ch;
+    lUInt32 p;
+    while ( (ch=*str++) ) {
+        if ( (ch & 0x80) == 0 ) {
+        } else if ( (ch & 0xE0) == 0xC0 ) {
+            if ( !(*str++) )
+                break;
+        } else if ( (ch & 0xF0) == 0xE0 ) {
+            p = (ch & 0x0F) << 12;
+            if ( !(ch=*str++) )
+                break;
+            p |= (ch & 0x3F) << 6;
+            if ( !(ch=*str++) )
+                break;
+            p |= ch & 0x3F;
+            if (p >= 0xD800 && p <= 0xDBFF) {           // high surrogate
+                ch = *str;
+                if ((ch & 0xF0) == 0xE0) {
+                    p = (ch & 0x0F) << 12;
+                    if ( !(ch=*(str+1)) )
+                        break;
+                    p |= (ch & 0x3F) << 6;
+                    if ( !(ch=*(str+2)) )
+                        break;
+                    p |= ch & 0x3F;
+                    if (p >= 0xDC00 && p <= 0xDFFF) {   // low surrogate
+                        str += 3;
+                    }
+                }
+            }
+        } else if ( (ch & 0xF8) == 0xF0 ) {
+            // Mostly unused
+            if ( !(*str++) )
+                break;
+            if ( !(*str++) )
+                break;
+            if ( !(*str++) )
+                break;
+        } else {
+            // invalid first byte in UTF-8 sequence, just leave as is
+            ;
+        }
+        count++;
+    }
+    return count;
+}
+
+int Wtf8CharCount( const lChar8 * str, int len )
+{
+    if (len == 0)
+        return 0;
+    int count = 0;
+    lUInt8 ch;
+    const lChar8 * endp = str + len;
+    while ((ch=*str)) {
+        if ( (ch & 0x80) == 0 ) {
+            str++;
+        } else if ( (ch & 0xE0) == 0xC0 ) {
+            str+=2;
+        } else if ( (ch & 0xF0) == 0xE0 ) {
+            str+=3;
+            ch=*str;
+            if ( (ch & 0xF0) == 0xE0 ) {
+                str+=3;
+            }
+        } else if ( (ch & 0xF8) == 0xF0 ) {
+            // Mostly unused
+            str+=4;
+        } else {
+            // invalid first byte of UTF-8 sequence, just leave as is
+            str++;
+        }
+        if (str > endp)
+            break;
+        count++;
+    }
+    return count;
+}
+
+inline int charUtf8ByteCount(lUInt32 ch) {
     if (!(ch & ~0x7F))
         return 1;
     if (!(ch & ~0x7FF))
@@ -3080,6 +4122,16 @@ inline int charUtf8ByteCount(int ch) {
     return 1;
 }
 
+inline int charUtf16WordCount(lUInt32 ch) {
+    if (!(ch & ~0xFFFF))
+        return 1;
+    if (!(ch & ~0x1FFFFF))
+        return 2;
+    // In Unicode Standard codepoint must be in range U+0000..U+10FFFF
+    // return invalid codepoint as one word
+    return 1;
+}
+
 int Utf8ByteCount(const lChar32 * str)
 {
     int count = 0;
@@ -3088,6 +4140,18 @@ int Utf8ByteCount(const lChar32 * str)
         count += charUtf8ByteCount(ch);
     }
     return count;
+}
+
+inline int charWtf8ByteCount(lUInt32 ch) {
+    if (!(ch & ~0x7F))
+        return 1;
+    if (!(ch & ~0x7FF))
+        return 2;
+    if (!(ch & ~0xFFFF))
+        return 3;
+    if (!(ch & ~0x1FFFFF))
+        return 6;
+    return 1;
 }
 
 int Utf8ByteCount(const lChar32 * str, int len)
@@ -3101,9 +4165,36 @@ int Utf8ByteCount(const lChar32 * str, int len)
     return count;
 }
 
+int Utf16WordCount(const lChar32 * str, int len)
+{
+    int count = 0;
+    lUInt32 ch;
+    while ((len--) > 0) {
+        ch = *str++;
+        count += charUtf16WordCount(ch);
+    }
+    return count;
+}
+
+int Wtf8ByteCount(const lChar32 * str, int len)
+{
+    int count = 0;
+    lUInt32 ch;
+    while ((len--) > 0) {
+        ch = *str++;
+        count += charWtf8ByteCount(ch);
+    }
+    return count;
+}
+
 lString32 Utf8ToUnicode( const lString8 & str )
 {
 	return Utf8ToUnicode( str.c_str() );
+}
+
+lString32 Utf16ToUnicode( const lString16 & str )
+{
+    return Utf16ToUnicode( str.c_str() );
 }
 
 #define CONT_BYTE(index,shift) (((lChar32)(s[index]) & 0x3F) << shift)
@@ -3133,6 +4224,93 @@ static void DecodeUtf8(const char * s,  lChar32 * p, int len)
             s += 3;
         } else {
             // Invalid first byte in UTF-8 sequence
+            // Pass with mask 0x7F, to resolve exception around env->NewStringUTF()
+            *p++ = (char) (ch & 0x7F);
+        }
+    }
+}
+
+static void DecodeWtf8(const char * s,  lChar32 * p, int len)
+{
+    lChar32 * endp = p + len;
+    lUInt32 ch;
+    while (p < endp) {
+        ch = *s;
+        bool matched = false;
+        if ( (ch & 0x80) == 0 ) {
+            matched = true;
+            *p++ = (char)ch;
+            s++;
+        } else if ( (ch & 0xE0) == 0xC0 ) {
+            matched = true;
+            *p++ = ((ch & 0x1F) << 6)
+                    | CONT_BYTE(1,0);
+            s += 2;
+        } else if ( (ch & 0xF0) == 0xE0 ) {
+            matched = true;
+            *p++ = ((ch & 0x0F) << 12)
+                | CONT_BYTE(1,6)
+                | CONT_BYTE(2,0);
+            s += 3;
+            if (*(p-1) >= 0xD800 && *(p-1) <= 0xDBFF) {     // what we wrote is a high surrogate,
+                lUInt32 next = *s;                          // and there's room next for a low surrogate
+                if ( (next & 0xF0) == 0xE0) {               // is a 3-bytes sequence
+                    next = ((next & 0x0F) << 12) | CONT_BYTE(1,6) | CONT_BYTE(2,0);
+                    if (next >= 0xDC00 && next <= 0xDFFF) { // is a low surrogate: valid surrogates sequence
+                        ch = 0x10000 + ((*(p-1) & 0x3FF)<<10) + (next & 0x3FF);
+                        p--; // rewind to override what we wrote
+                        *p++ = ch;
+                        s += 3;
+                    }
+                }
+            }
+        } else if ( (ch & 0xF8) == 0xF0 ) {
+            // Mostly unused
+            matched = true;
+            *p++ = ((ch & 0x07) << 18)
+                | CONT_BYTE(1,12)
+                | CONT_BYTE(2,6)
+                | CONT_BYTE(3,0);
+            s += 4;
+        } else {
+            // Invalid first byte in UTF-8 sequence
+            // Pass with mask 0x7F, to resolve exception around env->NewStringUTF()
+            *p++ = (char) (ch & 0x7F);
+            s++;
+            matched = true; // just to avoid next if
+        }
+
+        // unexpected character
+        if (!matched) {
+            *p++ = '?';
+            s++;
+        }
+    }
+}
+
+static void DecodeUtf16(const lChar16 * s,  lChar32 * p, int len)
+{
+    lChar32 * endp = p + len;
+    lUInt16 ch;
+    while (p < endp) {
+        ch = *s++;
+        if ( (ch >=0 && ch <= 0xD7FF) || (ch >= 0xE000 && ch <= 0xFFFF) ) {
+            *p++ = (lChar32)ch;
+        } else if ( ch >= 0xD800 && ch < 0xDC00 ) {
+            lUInt16 next = (lUInt16)*s;
+            if (next >= 0xDC00 && next < 0xE000) {
+                // convert surrogate pair into unicode code point
+                // 110110wwwwxxxxxx, 110111xxxxxxxxxx => 000uuuuuxxxxxxxxxxxxxxxx
+                //  where uuuuu = wwww+1
+                *p++ = ( ( ( (ch & 0x03C0) >> 6 ) + 1 ) << 16 ) | ((ch & 0x3F) << 10) | (next & 0x3FF);
+            } else {
+                // Invalid second word in UTF-16 sequence (including '\0')
+                // Pass with mask 0x7F, to resolve exception around env->NewStringUTF()
+                *p++ = (char) (ch & 0x7F);
+            }
+            s++;
+        } else {
+            // Invalid first word in UTF-16 sequence
             // Pass with mask 0x7F, to resolve exception around env->NewStringUTF()
             *p++ = (char) (ch & 0x7F);
         }
@@ -3231,6 +4409,50 @@ void Utf8ToUnicode(const lUInt8 * src,  int &srclen, lChar32 * dst, int &dstlen)
     dstlen = (int)(p - dst);
 }
 
+void Utf16ToUnicode(const lChar16 * src,  int &srclen, lChar32 * dst, int &dstlen)
+{
+    const lChar16 * s = src;
+    const lChar16 * ends = s + srclen;
+    lChar32 * p = dst;
+    lChar32 * endp = p + dstlen;
+    lUInt32 ch;
+    bool matched;
+    while (p < endp && s < ends) {
+        ch = *s;
+        matched = false;
+        if ( (ch >=0 && ch <= 0xD7FF) || (ch >= 0xE000 && ch <= 0xFFFF) ) {
+            matched = true;
+            *p++ = (lChar32)ch;
+            s++;
+        } else if ( ch >= 0xD800 && ch < 0xDC00 ) {
+            if (s + 2 > ends)
+                break;
+            lUInt16 next = *s;
+            if (next >= 0xDC00 && next < 0xE000) {
+                matched = true;
+                // convert surrogate pair into unicode code point
+                // 110110wwwwxxxxxx, 110111xxxxxxxxxx => 000uuuuuxxxxxxxxxxxxxxxx
+                //  where uuuuu = wwww+1
+                *p++ = ( ( ( (ch & 0x03C0) >> 6 ) + 1 ) << 16 ) | ((ch & 0x3F) << 10) | (next & 0x3FF);
+                s += 2;
+            }
+        } else {
+            // Invalid first word in UTF-16 sequence
+            // Pass with mask 0x7F, to resolve exception around env->NewStringUTF()
+            *p++ = (char) (ch & 0x7F);
+            s++;
+            matched = true; // just to avoid next if
+        }
+        // unexpected character
+        if (!matched) {
+            *p++ = '?';
+            s++;
+        }
+    }
+    srclen = (int)(s - src);
+    dstlen = (int)(p - dst);
+}
+
 lString32 Utf8ToUnicode( const char * s ) {
     if (!s || !s[0])
       return lString32::empty_str;
@@ -3257,6 +4479,64 @@ lString32 Utf8ToUnicode( const char * s, int sz ) {
     return dst;
 }
 
+lString32 Utf16ToUnicode( const lChar16 * s )
+{
+    if (!s || !s[0])
+      return lString32::empty_str;
+    int len = Utf16CharCount( s );
+    if (!len)
+      return lString32::empty_str;
+    lString32 dst;
+    dst.append(len, (lChar32)0);
+    lChar32 * p = dst.modify();
+    DecodeUtf16(s, p, len);
+    return dst;
+}
+
+lString32 Utf16ToUnicode( const lChar16 * s, int sz )
+{
+    if (!s || !s[0] || sz <= 0)
+      return lString32::empty_str;
+    int len = Utf16CharCount( s, sz );
+    if (!len)
+      return lString32::empty_str;
+    lString32 dst;
+    dst.append(len, 0);
+    lChar32 * p = dst.modify();
+    DecodeUtf16(s, p, len);
+    return dst;
+}
+
+lString32 Wtf8ToUnicode( const lString8 & str )
+{
+    return Wtf8ToUnicode( str.c_str() );
+}
+
+lString32 Wtf8ToUnicode( const char * s ) {
+    if (!s || !s[0])
+      return lString32::empty_str;
+    int len = Wtf8CharCount( s );
+    if (!len)
+      return lString32::empty_str;
+    lString32 dst;
+    dst.append(len, (lChar32)0);
+    lChar32 * p = dst.modify();
+    DecodeWtf8(s, p, len);
+    return dst;
+}
+
+lString32 Wtf8ToUnicode( const char * s, int sz ) {
+    if (!s || !s[0] || sz <= 0)
+      return lString32::empty_str;
+    int len = Utf8CharCount( s, sz );
+    if (!len)
+      return lString32::empty_str;
+    lString32 dst;
+    dst.append(len, 0);
+    lChar32 * p = dst.modify();
+    DecodeWtf8(s, p, len);
+    return dst;
+}
 
 lString8 UnicodeToUtf8(const lChar32 * s, int count)
 {
@@ -3296,9 +4576,102 @@ lString8 UnicodeToUtf8(const lChar32 * s, int count)
     return dst;
 }
 
+lString16 UnicodeToUtf16(const lChar32 * s, int count)
+{
+    if (count <= 0)
+        return lString16::empty_str;
+    lString16 dst;
+    int len = Utf16WordCount(s, count);
+    if (len <= 0)
+      return lString16::empty_str;
+    dst.append( len, ' ' );
+    lChar16 * buf = dst.modify();
+    {
+        lUInt32 ch;
+        while ((count--) > 0) {
+            ch = *s++;
+            if (!(ch & ~0xFFFF)) {
+                *buf++ = (lChar16)ch;
+            } else if (!(ch & ~0x1FFFFF)) {
+                // put into a surrogate pair
+                // 000uuuuuxxxxxxxxxxxxxxxx => 110110wwwwxxxxxx, 110111xxxxxxxxxx
+                //   where wwww = uuuuu - 1
+                // first word
+                *buf++ = (lChar16) ( 0xD800 | ( ( ( (ch >> 16) & 0x1F ) - 1 ) << 6 ) | ( (ch >> 10) & 0x3F ) );
+                // second word
+                *buf++ = (lChar16) ( 0xDC00 | (ch & 0x3FF) );
+            } else {
+                // invalid codepoint
+                // In Unicode Standard codepoint must be in range U+0000 .. U+10FFFF
+                *buf++ = L'?';
+            }
+        }
+    }
+    return dst;
+}
+
 lString8 UnicodeToUtf8( const lString32 & str )
 {
     return UnicodeToUtf8(str.c_str(), str.length());
+}
+
+lString16  UnicodeToUtf16( const lString32 & str )
+{
+    return UnicodeToUtf16(str.c_str(), str.length());
+}
+
+lString8 UnicodeToWtf8(const lChar32 * s, int count)
+{
+    if (count <= 0)
+      return lString8::empty_str;
+    lString8 dst;
+    int len = Wtf8ByteCount(s, count);
+    if (len <= 0)
+      return lString8::empty_str;
+    dst.append( len, ' ' );
+    lChar8 * buf = dst.modify();
+    {
+        lUInt32 ch;
+        while ((count--) > 0) {
+            ch = *s++;
+            if (!(ch & ~0x7F)) {
+                *buf++ = ( (lUInt8)ch );
+            } else if (!(ch & ~0x7FF)) {
+                *buf++ = ( (lUInt8) ( ((ch >> 6) & 0x1F) | 0xC0 ) );
+                *buf++ = ( (lUInt8) ( ((ch ) & 0x3F) | 0x80 ) );
+            } else if (!(ch & ~0xFFFF)) {
+                *buf++ = ( (lUInt8) ( ((ch >> 12) & 0x0F) | 0xE0 ) );
+                *buf++ = ( (lUInt8) ( ((ch >> 6) & 0x3F) | 0x80 ) );
+                *buf++ = ( (lUInt8) ( ((ch ) & 0x3F) | 0x80 ) );
+            } else if (!(ch & ~0x1FFFFF)) {
+                //   UTF-16 Scalar Value
+                // 000uuuuu xxxxxxxxxxxxxxxx
+                //   UTF-16
+                // 110110wwwwxxxxxx 110111xxxxxxxxxx
+                // wwww = uuuuu - 1
+                lUInt16 wwww = (ch >> 16) - 1;
+                lUInt16 low = ch & 0xFFFF;
+                lUInt32 hiSurr = 0xD800 | (wwww << 6) | (low >> 10);    // high surrogate
+                lUInt32 lowSurr = 0xDC00 | (low & 0x3FF);               // low surrogate
+                *buf++ = ( (lUInt8) ( ((hiSurr >> 12) & 0x0F) | 0xE0 ) );
+                *buf++ = ( (lUInt8) ( ((hiSurr >> 6) & 0x3F) | 0x80 ) );
+                *buf++ = ( (lUInt8) ( ((hiSurr ) & 0x3F) | 0x80 ) );
+                *buf++ = ( (lUInt8) ( ((lowSurr >> 12) & 0x0F) | 0xE0 ) );
+                *buf++ = ( (lUInt8) ( ((lowSurr >> 6) & 0x3F) | 0x80 ) );
+                *buf++ = ( (lUInt8) ( ((lowSurr ) & 0x3F) | 0x80 ) );
+            } else {
+                // invalid codepoint
+                // In Unicode Standard codepoint must be in range U+0000 .. U+10FFFF
+                *buf++ = '?';
+            }
+        }
+    }
+    return dst;
+}
+
+lString8 UnicodeToWtf8( const lString32 & str )
+{
+    return UnicodeToWtf8(str.c_str(), str.length());
 }
 
 lString8 UnicodeTo8Bit( const lString32 & str, const lChar8 * * table )
@@ -3337,14 +4710,15 @@ lString8 UnicodeToLocal( const lString32 & str )
    lString8 dst;
    if (str.empty())
       return dst;
+   lString16 utf16 = UnicodeToUtf16(str);
    CHAR def_char = '?';
    BOOL usedDefChar = FALSE;
    int len = WideCharToMultiByte(
       CP_ACP,
       WC_COMPOSITECHECK | WC_DISCARDNS
        | WC_SEPCHARS | WC_DEFAULTCHAR,
-      str.c_str(),
-      str.length(),
+      utf16.c_str(),
+      utf16.length(),
       NULL,
       0,
       &def_char,
@@ -3357,8 +4731,8 @@ lString8 UnicodeToLocal( const lString32 & str )
          CP_ACP,
          WC_COMPOSITECHECK | WC_DISCARDNS
           | WC_SEPCHARS | WC_DEFAULTCHAR,
-         str.c_str(),
-         str.length(),
+         utf16.c_str(),
+         utf16.length(),
          dst.modify(),
          len,
          &def_char,
@@ -3370,9 +4744,9 @@ lString8 UnicodeToLocal( const lString32 & str )
 
 lString32 LocalToUnicode( const lString8 & str )
 {
-   lString32 dst;
+   lString16 utf16;
    if (str.empty())
-      return dst;
+      return lString32::empty_str;
    int len = MultiByteToWideChar(
       CP_ACP,
       0,
@@ -3383,17 +4757,17 @@ lString32 LocalToUnicode( const lString8 & str )
       );
    if (len)
    {
-      dst.insert(0, len, ' ');
+      utf16.insert(0, len, ' ');
       MultiByteToWideChar(
          CP_ACP,
          0,
          str.c_str(),
          str.length(),
-         dst.modify(),
+         utf16.modify(),
          len
          );
    }
-   return dst;
+   return Utf16ToUnicode(utf16);
 }
 
 #else
