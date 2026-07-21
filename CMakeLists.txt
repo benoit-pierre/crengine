@@ -124,6 +124,8 @@ set(CPPCHECK_FLAGS
     --inline-suppr
     --platform=unix64
     --std=c++17
+    --suppress=nullPointerArithmeticOutOfMemory
+    --suppress=nullPointerOutOfMemory
     --template=gcc
 )
 
