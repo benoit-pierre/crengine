@@ -87,6 +87,12 @@ endfunction()
 # clang-tidy {{{
 
 find_program(CLANGTIDY clang-tidy)
+if(CLANGTIDY)
+    find_program(BUILDCACHE buildcache)
+    if(BUILDCACHE)
+        list(PREPEND CLANGTIDY env BUILDCACHE_LUA_PATH=${CMAKE_SOURCE_DIR}/utils ${BUILDCACHE})
+    endif()
+endif()
 
 set(CLANGTIDY_FLAGS
     --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy

@@ -5,8 +5,12 @@ ANSI_GREEN="$(printf '%b' '\e[32;1m')"
 ANSI_RED="$(printf '%b' '\e[31;1m')"
 ANSI_RESET="$(printf '%b' '\e[0m\e[1G')"
 
-prog="$1" file=
-case "${prog}" in */fake_tty.py | */npx) prog="$2" ;; esac
+for prog in "$@"; do
+    case "${prog}" in
+        *=* | */buildcache | env | */fake_tty.py | */npx) continue ;;
+        *) break ;;
+    esac
+done
 prog="${prog##*/}"
 for file in "$@"; do :; done
 case "${file}" in *=*) file="${file##*=}" ;; esac
