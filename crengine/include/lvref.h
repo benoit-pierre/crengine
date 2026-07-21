@@ -368,6 +368,10 @@ public:
     Separate counter object is used, so no counter support is required for T.
     \param T class of stored object
 */
+#if defined(__GNUC__ ) && !defined(__clang__)
+# pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 // NOLINTBEGIN(clang-analyzer-cplusplus.NewDelete)
 template <class T> class LVRef
 {
@@ -513,6 +517,9 @@ public:
     bool isNull() const { return _ptr->_obj == NULL; }
 };
 // NOLINTEND(clang-analyzer-cplusplus.NewDelete)
+#if defined(__GNUC__ ) && !defined(__clang__)
+# pragma GCC diagnostic pop
+#endif
 
 template <typename T >
 class LVRefVec
